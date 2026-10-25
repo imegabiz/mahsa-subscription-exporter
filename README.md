@@ -51,7 +51,9 @@ README.md
 
 ## Output format
 
-`configs.txt` lives in the repository root. It contains one raw link per line (`vless://`, `vmess://`, `trojan://` or `ss://`) and nothing else: no header, footer, timestamp, comments, or diagnostics. Links are stored exactly as received (only surrounding whitespace is trimmed). Records with other schemes, empty values, or non-string values are skipped.
+`configs.txt` lives in the repository root. It contains one raw link per line and nothing else: no header, footer, timestamp, comments, or diagnostics. Links are stored exactly as received (only surrounding whitespace is trimmed).
+
+A `config` value is accepted if it is a well-formed URI of the form `scheme://...` (a valid RFC 3986 scheme followed by a non-empty remainder on a single line, without control characters). There is no protocol allowlist, so `ss://`, `vless://`, `vmess://`, `trojan://`, `hysteria://`, `hysteria2://`, `hy2://` and any future proxy scheme are kept. Empty values, non-string values, malformed strings, and common non-config web schemes (`http`, `https`, `ftp`, `file`, `data`, `javascript`, `ws`, `wss` and a few similar ones) are skipped.
 
 Once the repository is public, the raw file can be consumed at:
 
