@@ -58,7 +58,7 @@ A `config` value is accepted if it is a well-formed URI of the form `scheme://..
 Once the repository is public, the raw file can be consumed at:
 
 ```
-https://raw.githubusercontent.com/<your-user>/mahsa-subscription-exporter/main/configs.txt
+https://raw.githubusercontent.com/imegabiz/mahsa-subscription-exporter/main/configs.txt
 ```
 
 Replace `<your-user>` with the account that owns the repository, and `main` with the default branch if it differs.
