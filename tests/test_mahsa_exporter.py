@@ -522,3 +522,140 @@ def test_https_enforced_and_https_downgrade_redirect_rejected():
         handler.redirect_request(request, None, 302, "Found", {}, "http://example.invalid/y")
     redirected = handler.redirect_request(request, None, 302, "Found", {}, "https://example.invalid/y")
     assert redirected.full_url == "https://example.invalid/y"
+
+
+HYSTERIA1_LINK = "hysteria://host.example.com:443?protocol=udp&auth=s3cret&peer=sni.example.com&insecure=1&upmbps=10&downmbps=50&alpn=h3&obfs=xplus&obfsParam=abc%3D#Hy1%20Node"
+HYSTERIA2_LINK = "hysteria2://pa55word@host.example.com:443/?sni=sni.example.com&obfs=salamander&obfs-password=xyz&insecure=1&pinSHA256=AA%3ABB#Hy2%20Node"
+HY2_LINK = "hy2://user:pass@host.example.com:20000-30000,443?sni=sni.example.com&mport=20000-30000#Hy2 Short"
+NEW_SCHEME_LINK = "tuic://uuid:pw@host.example.com:443?congestion_control=bbr&alpn=h3#New%20Proto"
+LEGACY_LINKS = [
+    "ss://YWVzLTEyOC1nY206cGFzcw==@1.2.3.4:8388#SS",
+    "vless://3f2b9c1e-0000-4000-8000-123456789abc@host.example.com:443?security=tls&type=ws&path=%2Fws#VLESS",
+    "vmess://eyJ2IjoiMiIsInBzIjoiVk1lc3MiLCJhZGQiOiIxLjEuMS4xIn0=",
+    "trojan://pw@host.example.com:443?sni=a.example.com#Trojan",
+]
+
+
+def only_links(links):
+    return {"mtn": [{"config": link} for link in links], "mci": []}
+
+
+@pytest.mark.parametrize(
+    "link",
+    [HYSTERIA1_LINK, HYSTERIA2_LINK, HY2_LINK],
+    ids=["hysteria", "hysteria2", "hy2"],
+)
+def test_hysteria_links_are_extracted(link):
+    assert list(mx.extract_configs(only_links([link])).links) == [link]
+
+
+def test_previously_supported_protocols_still_extracted():
+    assert list(mx.extract_configs(only_links(LEGACY_LINKS)).links) == LEGACY_LINKS
+
+
+@pytest.mark.parametrize(
+    "link",
+    [
+        NEW_SCHEME_LINK,
+        "wireguard://key@host.example.com:51820#wg",
+        "custom-proto+v2://payload@host.example.com:1#x",
+        "SOCKS5://user:pw@host.example.com:1080#upper",
+    ],
+)
+def test_unknown_but_valid_scheme_is_kept(link):
+    assert list(mx.extract_configs(only_links([link, LEGACY_LINKS[0]])).links) == [
+        link,
+        LEGACY_LINKS[0],
+    ]
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "",
+        "   ",
+        "garbage",
+        "just some text with spaces",
+        "://host:1",
+        "vless:/host:1",
+        "vless:host:1",
+        "vless://",
+        "vless:// host:1",
+        "vless://#only-fragment",
+        "vless://?only=query",
+        "1abc://host:1",
+        "-x://host:1",
+        "bad scheme://host:1",
+        "http://example.com/x",
+        "https://example.com/x",
+        "HTTPS://example.com/x",
+        "ftp://example.com/x",
+        "file:///etc/passwd",
+        "javascript://alert(1)",
+        "data://text/plain",
+        "vless://host:1\tx",
+        "vless://host:1\x00x",
+        "vless://host:1\u2028x",
+        "a" * 40 + "://host:1",
+    ],
+)
+def test_malformed_or_non_config_values_rejected(bad):
+    data = {"mtn": [{"config": bad}, {"config": LEGACY_LINKS[0]}], "mci": []}
+    assert list(mx.extract_configs(data).links) == [LEGACY_LINKS[0]]
+
+
+def test_new_protocol_links_are_preserved_byte_for_byte():
+    links = [HYSTERIA1_LINK, HYSTERIA2_LINK, HY2_LINK, NEW_SCHEME_LINK] + LEGACY_LINKS
+    data = {"mtn": [{"config": link, "hash": "h", "ads_url": "u"} for link in links], "mci": []}
+    assert list(mx.extract_configs(data).links) == links
+
+
+def test_duplicates_across_protocols_keep_first_occurrence():
+    data = {
+        "mtn": [{"config": HY2_LINK}, {"config": HYSTERIA1_LINK}, {"config": HY2_LINK}],
+        "mci": [{"config": HYSTERIA1_LINK}, {"config": NEW_SCHEME_LINK}, {"config": LEGACY_LINKS[0]}],
+    }
+    assert list(mx.extract_configs(data).links) == [
+        HY2_LINK,
+        HYSTERIA1_LINK,
+        NEW_SCHEME_LINK,
+        LEGACY_LINKS[0],
+    ]
+
+
+def test_new_protocols_from_both_groups(served, tmp_path):
+    payload = {
+        "mtn": [{"config": HYSTERIA2_LINK}, {"config": LEGACY_LINKS[1]}],
+        "mci": [{"config": HYSTERIA1_LINK}, {"config": HY2_LINK}, {"config": NEW_SCHEME_LINK}],
+    }
+    served["subscription"] = encrypt(payload)
+    out = tmp_path / "configs.txt"
+    report = mx.run(out)
+    expected = [HYSTERIA2_LINK, LEGACY_LINKS[1], HYSTERIA1_LINK, HY2_LINK, NEW_SCHEME_LINK]
+    assert out.read_text(encoding="utf-8").splitlines() == expected
+    assert report.valid == {"mtn": 2, "mci": 3}
+
+
+def test_failures_still_keep_previous_output_with_new_protocols(served, tmp_path):
+    out = tmp_path / "configs.txt"
+    out.write_text("vless://old@h:1#old\n")
+    served["subscription"] = encrypt(only_links([HYSTERIA2_LINK]), seed="wrong-seed")
+    with pytest.raises(mx.ExportError):
+        mx.run(out)
+    served["subscription"] = encrypt(only_links(["http://example.com", "garbage", ""]))
+    with pytest.raises(mx.ExportError):
+        mx.run(out)
+    served["subscription"] = mx.ExportError("HTTP error 500")
+    with pytest.raises(mx.ExportError):
+        mx.run(out)
+    assert out.read_text() == "vless://old@h:1#old\n"
+
+
+def test_output_file_contains_only_raw_links(served, tmp_path):
+    served["subscription"] = encrypt(only_links([HYSTERIA1_LINK, HYSTERIA2_LINK, HY2_LINK]))
+    out = tmp_path / "configs.txt"
+    mx.run(out)
+    lines = out.read_text(encoding="utf-8").splitlines()
+    assert lines == [HYSTERIA1_LINK, HYSTERIA2_LINK, HY2_LINK]
+    assert out.read_text(encoding="utf-8").endswith("\n")
+    assert all(mx._is_valid_link(line) for line in lines)
