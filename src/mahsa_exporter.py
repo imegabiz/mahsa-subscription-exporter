@@ -7,6 +7,7 @@ import http.client
 import json
 import logging
 import os
+import re
 import ssl
 import sys
 import tempfile
@@ -38,7 +39,23 @@ MAX_REFERENCE_BYTES = 2 * 1024 * 1024
 MAX_SUBSCRIPTION_BYTES = 8 * 1024 * 1024
 
 GROUPS = ("mtn", "mci")
-LINK_SCHEMES = ("vless://", "vmess://", "trojan://", "ss://")
+LINK_PATTERN = re.compile(r"^([A-Za-z][A-Za-z0-9+.\-]{0,31})://([^\s#?/].*)$")
+NON_CONFIG_SCHEMES = frozenset(
+    {
+        "http",
+        "https",
+        "ftp",
+        "ftps",
+        "sftp",
+        "file",
+        "data",
+        "javascript",
+        "ws",
+        "wss",
+        "blob",
+        "about",
+    }
+)
 DEFAULT_OUTPUT = Path(__file__).resolve().parent.parent / "configs.txt"
 
 CANONICAL_FUNCTIONS = {
@@ -397,10 +414,10 @@ def _is_valid_link(link):
         return False
     if any(ord(char) < 32 or ord(char) == 127 for char in link):
         return False
-    return any(
-        link.startswith(scheme) and len(link) > len(scheme)
-        for scheme in LINK_SCHEMES
-    )
+    match = LINK_PATTERN.match(link)
+    if match is None:
+        return False
+    return match.group(1).lower() not in NON_CONFIG_SCHEMES
 
 
 def extract_configs(data):
